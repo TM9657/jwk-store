@@ -32,7 +32,8 @@ Configure a KV to use with the app. Insert the ID in the wrangler.toml.
 
 > - `bun install` ➡️ installs the dependencies
 > - `wrangler secret put API_KEY` ➡️ set an API-Key. Remember this key as it has to be used to create new JWK or fetch the private keys of them.
-> - `bun run deploy` ➡️ creates the bucket and queue
+> - `bun run deploy` ➡️ deploys the solution to cloudflare
+> - `(optional) set a custom domain in your dashboard`
 
 **Provided by TM9657 GmbH with ❤️**
 ### Check out some of our products:
