@@ -1,0 +1,6 @@
+name = "jwk-store"
+compatibility_date = "2023-01-01"
+
+[[kv_namespaces]]
+binding = "STORAGE"
+id = "<YOUR_KV_NAMESPACE_ID>"
