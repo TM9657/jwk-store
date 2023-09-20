@@ -5,7 +5,7 @@ export type Bindings = {
   
 export type JWK = {
     password: string,
-    iv: ArrayBuffer,
-    private_jwk: ArrayBuffer,
+    iv: string,
+    private_jwk: string,
     public_jwk: any,
 }

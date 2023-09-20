@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import {hash, compare} from "bcryptjs"
-import { generateKeyPair } from 'jose'
+import { generateKeyPair, exportJWK } from 'jose'
 import { Bindings, JWK } from './index.types'
-import { getStoredJWKString, validation } from './util'
+import { getStoredJWKString, validation, base64ToArrayBuffer } from './util'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -15,50 +15,62 @@ app.use('/secure/*', async (c, next) => {
     await next()
 })
 
-app.post('/secure/:keyId', validation, async (c) => {
+app.post('/secure/:id', validation, async (c) => {
     const password = c.req.valid('json').password;
     const hashedPassword = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(password));
     const hashedPasswordKey = await crypto.subtle.importKey(
         "raw",
         hashedPassword,
-        { name: "PBKDF2" },
-        true,
-        ["encrypt",
-        "decrypt"]
+        "AES-GCM",
+        false,
+        ["encrypt", "decrypt"]
     );
-    const id = c.req.param('keyId')
-
+    const id = c.req.param('id')
     const jwk = await getStoredJWKString(c.env.STORAGE,id)
     if(jwk) {
-        const item : JWK = JSON.parse(jwk);
-        const access = await compare(password, item.password);
-        if(!access) {
-            return c.text('Unauthorized', 401)
+        try {
+            const item : JWK = JSON.parse(jwk);
+            const access = await compare(password, item.password);
+            if(!access) {
+                return c.text('Unauthorized', 401)
+            }
+            const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: base64ToArrayBuffer(item.iv) }, hashedPasswordKey, base64ToArrayBuffer(item.private_jwk));
+            const parsed_decrypted = JSON.parse(new TextDecoder().decode(decrypted));
+            return c.json(parsed_decrypted)
+        } catch (error) {
+            console.log(error)
+            return c.text("Internal Server Error", 500)
         }
-        const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: item.iv }, hashedPasswordKey, item.private_jwk);
-        const parsed_decrypted = JSON.parse(new TextDecoder().decode(decrypted));
-        return c.json(parsed_decrypted)
     }
+
     const iv = crypto.getRandomValues(new Uint8Array(12))
-    const newKeyPair = await generateKeyPair("ES512");
-    const encrypted_private_jwk = await crypto.subtle.encrypt(
+    const newKeyPair = await generateKeyPair("ES512", {
+        modulusLength: 4096,
+        extractable: true,
+    });
+
+    const privateKey = await exportJWK(newKeyPair.privateKey);
+    const publicKey = await exportJWK(newKeyPair.publicKey);
+
+    const encryptedPrivateJWK = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv: iv },
         hashedPasswordKey,
-        new TextEncoder().encode(JSON.stringify(newKeyPair.privateKey)),
+        new TextEncoder().encode(JSON.stringify(privateKey)),
       );
+
     const stored_object: JWK = {
-        iv: iv,
-        password: await hash(password, "jwk-store-tm9657"),
-        public_jwk: newKeyPair.publicKey,
-        private_jwk: encrypted_private_jwk,
+        iv: btoa(String.fromCharCode(...iv)),
+        password: await hash(password, 10),
+        public_jwk: publicKey,
+        private_jwk: btoa(String.fromCharCode(...new Uint8Array(encryptedPrivateJWK))),
     }
     await c.env.STORAGE.put(id, JSON.stringify(stored_object))
-    return c.json(newKeyPair.privateKey)
+    return c.json(privateKey)
 })
 
-app.delete('/secure/:keyId', validation, async (c) => {
+app.delete('/secure/:id', validation, async (c) => {
     const password = c.req.valid('json').password;
-    const id = c.req.param('keyId')
+    const id = c.req.param('id')
 
     const jwk = await getStoredJWKString(c.env.STORAGE,id)
     if(!jwk) {
@@ -74,12 +86,12 @@ app.delete('/secure/:keyId', validation, async (c) => {
     return c.text("Ok", 200)
 })
 
-app.get('/secure/:keyId', validation, async (c) => {
+app.get('/secure/:id', validation, async (c) => {
     return c.text("Ok", 200)
 })
 
-app.get('/:keyId', async (c) => {
-    const id = c.req.param('keyId')
+app.get('/:jwk', async (c) => {
+    const id = c.req.param('jwk')
 
     const jwk = await getStoredJWKString(c.env.STORAGE,id)
     if(!jwk) {
