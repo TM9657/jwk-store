@@ -107,7 +107,7 @@ app.get("/:jwk", async (c) => {
   const public_address = c.env.BUCKET_PUBLIC_ADDRESS.endsWith("/")
     ? c.env.BUCKET_PUBLIC_ADDRESS
     : c.env.BUCKET_PUBLIC_ADDRESS + "/";
-  c.redirect(`${public_address}jwk/${id}`);
+  return c.redirect(`${public_address}jwk/${id}`, 301);
 });
 
 app.get('/', async (c) => {
