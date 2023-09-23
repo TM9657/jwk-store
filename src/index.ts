@@ -1,21 +1,32 @@
-import { Hono } from 'hono'
-import {hash, compare} from "bcryptjs"
-import { generateKeyPair, exportJWK } from 'jose'
-import { Bindings, JWK } from './index.types'
-import { getStoredJWKString, validation, base64ToArrayBuffer } from './util'
+import { Hono } from "hono";
+import { hash, compare } from "bcryptjs";
+import {
+  generateKeyPair,
+  exportJWK,
+  exportPKCS8,
+  exportSPKI,
+  importJWK,
+  KeyLike,
+} from "jose";
+import { Bindings, JWK } from "./index.types";
+import { getStoredJWKString, validation, base64ToArrayBuffer } from "./util";
 
-const app = new Hono<{ Bindings: Bindings }>()
+const app = new Hono<{ Bindings: Bindings }>();
 
-app.use('/secure/*', async (c, next) => {
-    const api_key = c.env.API_KEY;
-    const api_key_header = c.req.header('authorization');
-    if (api_key_header !== api_key) {
-        return c.text('Unauthorized', 401)
-    }
-    await next()
-})
+app.use("/secure/*", async (c, next) => {
+  const api_key = c.env.API_KEY;
+  const api_key_header = c.req.header("authorization");
+  if (api_key_header !== api_key) {
+    return c.text("Unauthorized", 401);
+  }
+  await next();
+});
 
-app.post("/secure/:id", validation, async (c) => {
+app.post("/secure/:id/:mode?", validation, async (c) => {
+  const mode = c.req.param("mode");
+  let id = c.req.param("id");
+  if (!id) return c.text("Bad Request", 400);
+  id = encodeURIComponent(id);
   const password = c.req.valid("json").password;
   const hashedPassword = await crypto.subtle.digest(
     "SHA-256",
@@ -25,10 +36,9 @@ app.post("/secure/:id", validation, async (c) => {
     "raw",
     hashedPassword,
     "AES-GCM",
-    false,
+    true,
     ["encrypt", "decrypt"]
   );
-  const id = encodeURIComponent(c.req.param("id"));
   const jwk = await getStoredJWKString(c.env.STORAGE, id);
   if (jwk) {
     try {
@@ -43,6 +53,13 @@ app.post("/secure/:id", validation, async (c) => {
         base64ToArrayBuffer(item.private_jwk)
       );
       const parsed_decrypted = JSON.parse(new TextDecoder().decode(decrypted));
+      if (!mode || typeof mode === "undefined" || mode === "jwk")
+        return c.json(parsed_decrypted);
+      const privateKey = (await importJWK(
+        { ...parsed_decrypted, ext: true },
+        "ES512"
+      )) as KeyLike;
+      if (mode === "pem") return c.text(await exportPKCS8(privateKey));
       return c.json(parsed_decrypted);
     } catch (error) {
       console.log(error);
@@ -73,8 +90,12 @@ app.post("/secure/:id", validation, async (c) => {
     ),
   };
 
+  const spki = await exportSPKI(newKeyPair.publicKey);
   await c.env.CDN_BUCKET.put(`jwk/${id}`, JSON.stringify(publicKey));
+  await c.env.CDN_BUCKET.put(`jwk/spki/${id}`, spki);
   await c.env.STORAGE.put(id, JSON.stringify(stored_object));
+
+  if (mode === "pem") return c.text(await exportPKCS8(newKeyPair.privateKey));
   return c.json(privateKey);
 });
 
@@ -95,6 +116,7 @@ app.delete("/secure/:id", validation, async (c) => {
 
   await c.env.STORAGE.delete(id);
   await c.env.CDN_BUCKET.delete(`jwk/${id}`);
+  await c.env.CDN_BUCKET.delete(`jwk/spki/${id}`);
   return c.text("Ok", 200);
 });
 
@@ -102,17 +124,28 @@ app.get("/secure/:id", validation, async (c) => {
   return c.text("Ok", 200);
 });
 
-app.get("/:jwk", async (c) => {
-  const id = encodeURIComponent(c.req.param("jwk"));
+app.get("/:jwk/:mode?", async (c) => {
+  const mode = c.req.param("mode");
+  let id = c.req.param("jwk");
+  if (!id) return c.text("Bad Request", 400);
+  id = encodeURIComponent(id);
+
   const public_address = c.env.BUCKET_PUBLIC_ADDRESS.endsWith("/")
     ? c.env.BUCKET_PUBLIC_ADDRESS
     : c.env.BUCKET_PUBLIC_ADDRESS + "/";
+
+  if (mode === "spki" || mode === "pem") {
+    return c.redirect(`${public_address}jwk/spki/${id}`, 301);
+  }
+
   return c.redirect(`${public_address}jwk/${id}`, 301);
 });
 
-app.get('/', async (c) => {
-    return c.html('JWK token service, provided by <a href="https://tm9657.de">TM9657.de</a>', 200)
-})
+app.get("/", async (c) => {
+  return c.html(
+    'JWK token service, provided by <a href="https://tm9657.de">TM9657.de</a>',
+    200
+  );
+});
 
-export default app
-
+export default app;
