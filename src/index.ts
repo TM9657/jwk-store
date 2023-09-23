@@ -25,7 +25,7 @@ app.post('/secure/:id', validation, async (c) => {
         false,
         ["encrypt", "decrypt"]
     );
-    const id = c.req.param('id')
+    const id = encodeURIComponent(c.req.param("id")); 
     const jwk = await getStoredJWKString(c.env.STORAGE,id)
     if(jwk) {
         try {
@@ -59,30 +59,36 @@ app.post('/secure/:id', validation, async (c) => {
       );
 
     const stored_object: JWK = {
-        iv: btoa(String.fromCharCode(...iv)),
-        password: await hash(password, 10),
-        public_jwk: publicKey,
-        private_jwk: btoa(String.fromCharCode(...new Uint8Array(encryptedPrivateJWK))),
-    }
+      iv: btoa(String.fromCharCode(...iv)),
+      password: await hash(password, 10),
+      private_jwk: btoa(
+        String.fromCharCode(...new Uint8Array(encryptedPrivateJWK))
+      ),
+    };
+
+    c.env.CDN_BUCKET.put(`jwk/${id}`, JSON.stringify(publicKey));
+
     await c.env.STORAGE.put(id, JSON.stringify(stored_object))
     return c.json(privateKey)
 })
 
 app.delete('/secure/:id', validation, async (c) => {
     const password = c.req.valid('json').password;
-    const id = c.req.param('id')
+    const id = encodeURIComponent(c.req.param("id"));
 
-    const jwk = await getStoredJWKString(c.env.STORAGE,id)
-    if(!jwk) {
-        return c.text("Ok", 200)
+    const jwk = await getStoredJWKString(c.env.STORAGE, id);
+    if (!jwk) {
+      return c.text("Ok", 200);
     }
 
-    const item : JWK = JSON.parse(jwk);
+    const item: JWK = JSON.parse(jwk);
     const access = await compare(password, item.password);
-    if(!access) {
-        return c.text('Unauthorized', 401)
+    if (!access) {
+      return c.text("Unauthorized", 401);
     }
+    
     await c.env.STORAGE.delete(id)
+    await c.env.CDN_BUCKET.delete(`jwk/${id}`);
     return c.text("Ok", 200)
 })
 
@@ -91,15 +97,11 @@ app.get('/secure/:id', validation, async (c) => {
 })
 
 app.get('/:jwk', async (c) => {
-    const id = c.req.param('jwk')
-
-    const jwk = await getStoredJWKString(c.env.STORAGE,id)
-    if(!jwk) {
-        return c.text('Not Found', 404)
-    }
-
-    const parsedJWK : JWK = JSON.parse(jwk)
-    return c.json(parsedJWK.public_jwk)
+    const id = encodeURIComponent(c.req.param("jwk"));
+    const public_address = c.env.BUCKET_PUBLIC_ADDRESS.endsWith("/")
+      ? c.env.BUCKET_PUBLIC_ADDRESS
+      : c.env.BUCKET_PUBLIC_ADDRESS + "/";
+    c.redirect(`${public_address}jwk/${id}`);
 })
 
 app.get('/', async (c) => {
